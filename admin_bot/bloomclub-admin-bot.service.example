@@ -1,0 +1,14 @@
+[Unit]
+Description=Bloom Club Admin Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bloomclub/-fed_women_club_mini-app_TELEGA/admin_bot
+EnvironmentFile=/opt/bloomclub/-fed_women_club_mini-app_TELEGA/admin_bot/.env
+ExecStart=/usr/bin/python3 -m admin_bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

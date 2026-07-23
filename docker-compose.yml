@@ -1,0 +1,19 @@
+services:
+  telegram-mini-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_TG_LOCAL_CATALOG_ENABLED: ${VITE_TG_LOCAL_CATALOG_ENABLED}
+        VITE_TG_API_BASE_URL: ${VITE_TG_API_BASE_URL}
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      TELEGRAM_APP_DATABASE_URL: ${TELEGRAM_APP_DATABASE_URL}
+      TELEGRAM_ADMIN_API_TOKEN: ${TELEGRAM_ADMIN_API_TOKEN}
+      TELEGRAM_AUTO_INIT_DB: ${TELEGRAM_AUTO_INIT_DB:-false}
+    restart: unless-stopped
