@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f8eef0" />
+    <title>Bloom Club</title>
+  </head>
+  <body>
+    <section
+      id="bloom-html-fallback-overlay"
+      role="status"
+      aria-live="polite"
+      style="position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: center; justify-content: center; background: #fff7fa; color: #2b1b22; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; flex-direction: column; gap: 16px; padding: 24px; box-sizing: border-box; text-align: center;"
+    >
+      <h1>Bloom Club загружается</h1>
+      <p>Если экран не меняется больше 10 секунд, закройте и откройте приложение заново</p>
+      <button type="button" onclick="location.reload()">Перезагрузить</button>
+      <p id="bloom-html-fallback-diagnostic">Диагностика появится после запуска приложения</p>
+    </section>
+    <script>
+      window.__BLOOM_HTML_FALLBACK_PRESENT__ = true;
+      window.__BLOOM_HTML_FALLBACK_REMOVED__ = false;
+      window.__BLOOM_ENTRY_SCRIPT_EXECUTED__ = false;
+      window.setTimeout(function bloomHtmlEntryWatchdog() {
+        if (window.__BLOOM_ENTRY_SCRIPT_EXECUTED__ === true || window.__BLOOM_HTML_FALLBACK_REMOVED__ === true) {
+          return;
+        }
+        var diagnostic = document.getElementById("bloom-html-fallback-diagnostic");
+        if (diagnostic) {
+          diagnostic.textContent = "Ошибка запуска: JS entry не выполнен. Возможна загрузка устаревшего HTML или не найден asset приложения.";
+          diagnostic.setAttribute("role", "alert");
+        }
+      }, 8000);
+    </script>
+    <div id="root"></div>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

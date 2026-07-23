@@ -1,0 +1,33 @@
+{
+  "name": "bloom-club-telegram-mini-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host 0.0.0.0",
+    "init:tg-db": "python -m telegram_app.scripts.init_db",
+    "seed:tg-db": "python -m telegram_app.scripts.seed_dev_data",
+    "check:tg-db-env": "python -m telegram_app.scripts.check_db_env",
+    "start:production": "node server/production-server.js",
+    "start": "node server/production-server.js",
+    "start:api": "node server/production-server.js",
+    "sync:content-to-tg-db": "python -m telegram_app.scripts.sync_content_to_tg_catalog",
+    "tg-catalog:backfill": "python -m telegram_app.scripts.sync_content_to_tg_catalog"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "dotenv": "latest",
+    "pg": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest"
+  }
+}
