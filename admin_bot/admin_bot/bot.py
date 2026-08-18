@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from html import escape
 import json
 import logging
 from datetime import datetime
@@ -167,6 +168,17 @@ def telegram_display_name(user: Any) -> str | None:
     display_name = " ".join(str(part).strip() for part in parts if part).strip()
     return display_name or getattr(user, "full_name", None) or None
 
+
+def format_chat_id_message(chat_id: int, title: str | None, chat_type: object) -> str:
+    chat_type_value = getattr(chat_type, "value", chat_type)
+    return (
+        "🆔 <b>ID этой группы</b>\n"
+        f"<code>{chat_id}</code>\n\n"
+        f"Название: {escape(title or '—')}\n"
+        f"Тип: <code>{escape(str(chat_type_value))}</code>\n\n"
+        "Скопируйте ID целиком, включая знак минус."
+    )
+
 def is_not_found_error(exc: WebApiError) -> bool:
     return "404:" in str(exc)
 
@@ -218,6 +230,17 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
     await message.answer(
         "Добро пожаловать в Bloom Club. Нажмите кнопку ниже, чтобы открыть приложение и получить код входа.",
         reply_markup=public_onboarding_keyboard(),
+    )
+
+
+@router.message(Command("chatid"))
+async def chat_id(message: Message) -> None:
+    chat_type = getattr(message.chat.type, "value", message.chat.type)
+    if chat_type not in {"group", "supergroup"}:
+        await message.answer("Отправьте команду /chatid внутри нужной Telegram-группы.")
+        return
+    await message.answer(
+        format_chat_id_message(message.chat.id, message.chat.title, message.chat.type)
     )
 
 
