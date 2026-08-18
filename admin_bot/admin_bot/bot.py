@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -241,6 +242,27 @@ async def chat_id(message: Message) -> None:
         return
     await message.answer(
         format_chat_id_message(message.chat.id, message.chat.title, message.chat.type)
+    )
+
+
+@router.channel_post(Command("chatid"))
+async def channel_chat_id(message: Message, bot: Bot, settings: Settings) -> None:
+    response = format_chat_id_message(message.chat.id, message.chat.title, message.chat.type)
+    delivered = 0
+    for admin_id in settings.telegram_admin_ids:
+        try:
+            await bot.send_message(admin_id, response)
+            delivered += 1
+        except TelegramAPIError:
+            logger.exception(
+                "Failed to send channel chat ID to admin_id=%s channel_id=%s",
+                admin_id,
+                message.chat.id,
+            )
+    logger.info(
+        "Channel chat ID requested channel_id=%s delivered_to_admins=%s",
+        message.chat.id,
+        delivered,
     )
 
 
