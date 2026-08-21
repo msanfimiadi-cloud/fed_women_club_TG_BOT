@@ -25,7 +25,8 @@ def test_no_browser_login_token_generation_remains_in_telegram_bot():
 def test_public_onboarding_bypasses_admin_only_middleware():
     bot = read("admin_bot/bot.py")
     assert "def is_public_onboarding_event" in bot
-    assert 'text in {"/start", PUBLIC_APP_BUTTON_TEXT}' in bot
+    assert 'text == "/start" or text.startswith("/start ")' in bot
+    assert "text in {PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT}" in bot
     assert "if is_public_onboarding_event(event):\n            return await handler(event, data)" in bot
     assert "if not is_admin_user(user, self._admin_ids):" in bot
 
@@ -37,3 +38,33 @@ def test_non_admin_start_gets_public_welcome_not_admin_menu():
     assert "reply_markup=public_onboarding_keyboard()" in bot
     assert "if is_admin_user(message.from_user, settings.telegram_admin_ids):" in bot
     assert "Админ-бот Bloom Club. Выберите действие." in bot
+
+
+def test_public_start_explains_trial_login_installation_and_social_channels():
+    bot = read("admin_bot/bot.py")
+
+    for marker in (
+        "15 дней бесплатно",
+        "Как войти в приложение",
+        "код — он действует 5 минут",
+        "привязан к этому Telegram-профилю",
+        "Если вы выйдете из приложения",
+        "Добавить на главный экран",
+        "На экран “Домой”",
+        "https://t.me/Wo_ClubNSK",
+        "https://vk.ru/club238169934",
+        "https://www.instagram.com/bloomclubnsk",
+        "?igsi=M3lnaHp2d3J1YzJm&utm_source=qr",
+    ):
+        assert marker in bot
+
+    assert "PUBLIC_SOCIAL_TEXT" in bot
+    assert "public_social_keyboard()" in bot
+    assert 'PUBLIC_APP_BUTTON_TEXT = "🔐 Получить код для входа"' in bot
+
+
+def test_legacy_open_app_button_still_generates_login_code():
+    bot = read("admin_bot/bot.py")
+
+    assert 'LEGACY_PUBLIC_APP_BUTTON_TEXT = "🌐 Открыть приложение"' in bot
+    assert "F.text.in_({PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT})" in bot

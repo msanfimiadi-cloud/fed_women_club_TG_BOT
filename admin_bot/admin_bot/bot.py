@@ -108,13 +108,59 @@ _login_code: LoginCodeClient | None = None
 _browser_app_public_url = "https://app.bloomclub.ru"
 
 
-PUBLIC_APP_BUTTON_TEXT = "🌐 Открыть приложение"
+PUBLIC_APP_BUTTON_TEXT = "🔐 Получить код для входа"
+LEGACY_PUBLIC_APP_BUTTON_TEXT = "🌐 Открыть приложение"
+
+PUBLIC_WELCOME_TEXT = (
+    "🌸 <b>Добро пожаловать в Bloom Club!</b>\n\n"
+    "Bloom Club — женский клуб привилегий. В приложении собраны подарки, "
+    "скидки и специальные предложения от партнёров Новосибирска: студий красоты, "
+    "цветочных, специалистов по здоровью, отдыху и другим направлениям.\n\n"
+    "🎁 <b>Новым участницам доступно 15 дней бесплатно.</b>\n"
+    "После входа откройте раздел подписки и активируйте тестовый период."
+)
+
+PUBLIC_LOGIN_GUIDE_TEXT = (
+    "<b>Как войти в приложение:</b>\n"
+    "1. Нажмите «🔐 Получить код для входа».\n"
+    "2. Скопируйте код — он действует 5 минут.\n"
+    "3. Откройте приложение по кнопке под кодом.\n"
+    "4. Введите код на экране авторизации.\n\n"
+    "Ваш аккаунт Bloom Club будет привязан к этому Telegram-профилю. "
+    "Если вы выйдете из приложения, вернитесь в этого бота и запросите новый код.\n\n"
+    "📲 <b>Приложение можно добавить на экран телефона:</b>\n"
+    "• Android: откройте меню браузера ⋮ → «Добавить на главный экран».\n"
+    "• iPhone: нажмите «Поделиться» → «На экран “Домой”»."
+)
+
+PUBLIC_SOCIAL_TEXT = (
+    "💐 <b>Подписывайтесь на Bloom Club</b>\n"
+    "Там публикуем новых партнёров, привилегии, новости и розыгрыши."
+)
 
 
 def public_onboarding_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)]],
         resize_keyboard=True,
+    )
+
+
+def public_social_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Telegram-канал", url="https://t.me/Wo_ClubNSK")],
+            [InlineKeyboardButton(text="ВКонтакте", url="https://vk.ru/club238169934")],
+            [
+                InlineKeyboardButton(
+                    text="Instagram",
+                    url=(
+                        "https://www.instagram.com/bloomclubnsk"
+                        "?igsi=M3lnaHp2d3J1YzJm&utm_source=qr"
+                    ),
+                )
+            ],
+        ]
     )
 
 
@@ -126,7 +172,8 @@ def is_public_onboarding_event(event: TelegramObject) -> bool:
     if not isinstance(event, Message):
         return False
     text = (event.text or "").strip()
-    return text in {"/start", PUBLIC_APP_BUTTON_TEXT}
+    is_start_command = text == "/start" or text.startswith("/start ")
+    return is_start_command or text in {PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT}
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
@@ -228,10 +275,9 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
     if is_admin_user(message.from_user, settings.telegram_admin_ids):
         await message.answer("Админ-бот Bloom Club. Выберите действие.", reply_markup=main_menu())
         return
-    await message.answer(
-        "Добро пожаловать в Bloom Club. Нажмите кнопку ниже, чтобы открыть приложение и получить код входа.",
-        reply_markup=public_onboarding_keyboard(),
-    )
+    await message.answer(PUBLIC_WELCOME_TEXT)
+    await message.answer(PUBLIC_LOGIN_GUIDE_TEXT, reply_markup=public_onboarding_keyboard())
+    await message.answer(PUBLIC_SOCIAL_TEXT, reply_markup=public_social_keyboard())
 
 
 @router.message(Command("chatid"))
@@ -287,7 +333,7 @@ async def back_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.message(F.text == PUBLIC_APP_BUTTON_TEXT)
+@router.message(F.text.in_({PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT}))
 async def open_browser_app(message: Message) -> None:
     user = message.from_user
     if user is None:
