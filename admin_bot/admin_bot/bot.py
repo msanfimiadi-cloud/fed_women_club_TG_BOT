@@ -489,7 +489,9 @@ async def open_browser_app(message: Message) -> None:
     await message.answer(result.login_code)
     await message.answer(
         "Код действует 5 минут.\n"
-        "Нажмите кнопку ниже, чтобы открыть приложение.",
+        "Нажмите кнопку ниже, чтобы открыть приложение.\n\n"
+        "Чтобы добавить Bloom Club на экран телефона, откройте приложение "
+        "во внешнем браузере: нажмите <b>⋯ → Открыть в браузере</b>.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🌐 Открыть приложение", url=_browser_app_public_url)]]
         ),
