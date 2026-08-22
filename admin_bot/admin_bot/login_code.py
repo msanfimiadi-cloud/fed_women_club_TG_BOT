@@ -31,7 +31,8 @@ class LoginCodeClient:
         self._api_base_url = api_base_url.rstrip("/")
         self._client = httpx.AsyncClient(
             base_url=self._api_base_url,
-            timeout=15,
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             headers={"Authorization": f"Bearer {service_token}"},
         )
 

@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -142,6 +142,72 @@ PUBLIC_SOCIAL_TEXT = (
     "Там публикуем новых партнёров, привилегии, новости и розыгрыши."
 )
 
+PUBLIC_ONBOARDING_TEXT = (
+    f"{PUBLIC_WELCOME_TEXT}\n\n"
+    f"{PUBLIC_LOGIN_GUIDE_TEXT}\n\n"
+    f"{PUBLIC_SOCIAL_TEXT}\n"
+    '• <a href="https://t.me/Wo_ClubNSK">Telegram-канал</a>\n'
+    '• <a href="https://vk.ru/club238169934">ВКонтакте</a>\n'
+    '• <a href="https://www.instagram.com/bloomclubnsk">Instagram</a>'
+)
+
+
+class TelegramSendLimiter:
+    def __init__(self, messages_per_second: int) -> None:
+        self._interval = 1 / messages_per_second
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._lock: asyncio.Lock | None = None
+        self._next_send_at = 0.0
+        self._chat_next_send_at: dict[int, float] = {}
+
+    async def wait(self, chat_id: int | None = None) -> None:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._loop = loop
+            self._lock = asyncio.Lock()
+            self._next_send_at = 0.0
+            self._chat_next_send_at = {}
+
+        assert self._lock is not None
+        async with self._lock:
+            send_at = max(loop.time(), self._next_send_at)
+            if chat_id is not None:
+                send_at = max(send_at, self._chat_next_send_at.get(chat_id, 0.0))
+                self._chat_next_send_at[chat_id] = send_at + 1.05
+            self._next_send_at = send_at + self._interval
+
+        delay = send_at - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+_public_message_limiter = TelegramSendLimiter(messages_per_second=15)
+_notification_message_limiter = TelegramSendLimiter(messages_per_second=10)
+
+
+async def send_telegram_message(
+    sender: Callable[..., Awaitable[Any]],
+    *args: Any,
+    chat_id: int | None = None,
+    background: bool = False,
+    **kwargs: Any,
+) -> Any:
+    limiter = _notification_message_limiter if background else _public_message_limiter
+    for attempt in range(3):
+        await limiter.wait(chat_id if background else None)
+        try:
+            return await sender(*args, **kwargs)
+        except TelegramRetryAfter as exc:
+            if attempt == 2:
+                raise
+            logger.warning("Telegram rate limit reached; retrying in %s seconds", exc.retry_after)
+            await asyncio.sleep(exc.retry_after + 0.1)
+        except TelegramNetworkError:
+            if attempt == 2:
+                raise
+            logger.warning("Telegram network error; retrying message delivery")
+            await asyncio.sleep(0.5 * (attempt + 1))
+
 
 def public_onboarding_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -253,7 +319,9 @@ async def notify_new_user(
 
     async def deliver(recipient_id: int) -> None:
         try:
-            await bot.send_message(recipient_id, text)
+            await send_telegram_message(
+                bot.send_message, recipient_id, text, chat_id=recipient_id, background=True
+            )
         except TelegramAPIError:
             logger.exception(
                 "Failed to notify recipient_id=%s about new telegram_user_id=%s",
@@ -340,11 +408,13 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
         username=getattr(user, "username", None),
         display_name=telegram_display_name(user),
     )
-    await message.answer(PUBLIC_WELCOME_TEXT)
+    await send_telegram_message(
+        message.answer,
+        PUBLIC_ONBOARDING_TEXT,
+        reply_markup=public_onboarding_keyboard(),
+    )
     if is_new_user and user is not None and not store.is_partner(user.id):
         schedule_new_user_notification(message.bot, user, settings.telegram_admin_ids, store)
-    await message.answer(PUBLIC_LOGIN_GUIDE_TEXT, reply_markup=public_onboarding_keyboard())
-    await message.answer(PUBLIC_SOCIAL_TEXT, reply_markup=public_social_keyboard())
 
 
 @router.message(F.text == "🤝 Выдать права партнёра")
@@ -485,9 +555,10 @@ async def open_browser_app(message: Message) -> None:
         user.id,
         result.expires_in,
     )
-    await message.answer("🔐 Ваш код входа:")
-    await message.answer(result.login_code)
-    await message.answer(
+    await send_telegram_message(message.answer, result.login_code)
+    await send_telegram_message(
+        message.answer,
+        "🔐 Код для входа отправлен отдельным сообщением выше.\n\n"
         "Код действует 5 минут.\n"
         "Нажмите кнопку ниже, чтобы открыть приложение.\n\n"
         "Чтобы добавить Bloom Club на экран телефона, откройте приложение "
