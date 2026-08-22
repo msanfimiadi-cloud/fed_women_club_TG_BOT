@@ -555,10 +555,10 @@ async def open_browser_app(message: Message) -> None:
         user.id,
         result.expires_in,
     )
+    await send_telegram_message(message.answer, result.login_code)
     await send_telegram_message(
         message.answer,
-        "🔐 <b>Ваш код входа:</b>\n"
-        f"<code>{escape(result.login_code)}</code>\n\n"
+        "🔐 Код для входа отправлен отдельным сообщением выше.\n\n"
         "Код действует 5 минут.\n"
         "Нажмите кнопку ниже, чтобы открыть приложение.\n\n"
         "Чтобы добавить Bloom Club на экран телефона, откройте приложение "
