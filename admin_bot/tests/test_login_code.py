@@ -154,10 +154,13 @@ def test_public_app_button_sends_copyable_login_code_messages(monkeypatch):
 
         await bot_module.open_browser_app(message)
 
-        assert len(message.answers) == 1
-        app_message_text, app_message_markup = message.answers[0]
-        assert "🔐 <b>Ваш код входа:</b>" in app_message_text
-        assert "<code>BC-XXXXXX</code>" in app_message_text
+        assert len(message.answers) == 2
+        raw_code_text, raw_code_markup = message.answers[0]
+        assert raw_code_text == "BC-XXXXXX"
+        assert raw_code_markup is None
+
+        app_message_text, app_message_markup = message.answers[1]
+        assert "Код для входа отправлен отдельным сообщением выше." in app_message_text
         assert "Код действует 5 минут." in app_message_text
         assert "⋯ → Открыть в браузере" in app_message_text
         assert "/login?t=" not in app_message_text
