@@ -70,15 +70,15 @@ def test_legacy_open_app_button_still_generates_login_code():
     assert "F.text.in_({PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT})" in bot
 
 
-def test_public_onboarding_and_login_code_use_one_message_each():
+def test_public_onboarding_is_consolidated_but_login_code_is_separate():
     bot = read("admin_bot/bot.py")
 
     assert "PUBLIC_ONBOARDING_TEXT = (" in bot
     assert "f\"{PUBLIC_WELCOME_TEXT}\\n\\n\"" in bot
     assert "f\"{PUBLIC_LOGIN_GUIDE_TEXT}\\n\\n\"" in bot
     assert "await message.answer(PUBLIC_WELCOME_TEXT)" not in bot
-    assert "await message.answer(result.login_code)" not in bot
-    assert "f\"<code>{escape(result.login_code)}</code>\\n\\n\"" in bot
+    assert "await send_telegram_message(message.answer, result.login_code)" in bot
+    assert "Код для входа отправлен отдельным сообщением выше." in bot
 
 
 def test_public_messages_and_notifications_have_rate_limits_and_retries():
