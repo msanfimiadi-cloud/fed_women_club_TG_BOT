@@ -29,6 +29,10 @@ class PartnerEdit(StatesGroup):
     value = State()
 
 
+class PartnerAccessGrant(StatesGroup):
+    telegram_user_id = State()
+
+
 class PartnerPhotoAdd(StatesGroup):
     photo = State()
 

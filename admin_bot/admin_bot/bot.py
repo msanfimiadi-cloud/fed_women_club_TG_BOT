@@ -90,6 +90,7 @@ from .states import (
     OfferEdit,
     OfferPhotoAdd,
     PartnerCreate,
+    PartnerAccessGrant,
     PartnerEdit,
     PartnerPhotoAdd,
     PrivilegeCodeBulkImport,
@@ -99,12 +100,15 @@ from .states import (
     AdminSearch,
 )
 from .login_code import LoginCodeClient, LoginCodeError, LoginCodeIdentity
+from .notification_store import NotificationStore
 from .web_api import ContentAdminApiClient, WebApiError
 
 logger = logging.getLogger(__name__)
 router = Router()
 _content_api: ContentAdminApiClient | None = None
 _login_code: LoginCodeClient | None = None
+_notification_store: NotificationStore | None = None
+_notification_tasks: set[asyncio.Task[Any]] = set()
 _browser_app_public_url = "https://app.bloomclub.ru"
 
 
@@ -211,10 +215,64 @@ def get_login_code_client() -> LoginCodeClient:
     return _login_code
 
 
+def get_notification_store() -> NotificationStore:
+    global _notification_store
+    if _notification_store is None:
+        database_path = Path(__file__).resolve().parents[1] / "data" / "bot_notifications.sqlite3"
+        _notification_store = NotificationStore(database_path)
+    return _notification_store
+
+
 def telegram_display_name(user: Any) -> str | None:
     parts = [getattr(user, "first_name", None), getattr(user, "last_name", None)]
     display_name = " ".join(str(part).strip() for part in parts if part).strip()
     return display_name or getattr(user, "full_name", None) or None
+
+
+def format_new_user_notification(user: Any) -> str:
+    name = escape(telegram_display_name(user) or "Не указано")
+    username = getattr(user, "username", None)
+    username_text = f"@{escape(str(username))}" if username else "не указан"
+    return (
+        "🆕 <b>Новый пользователь запустил Bloom Club</b>\n\n"
+        f"Имя: {name}\n"
+        f"Username: {username_text}\n"
+        f"Telegram ID: <code>{user.id}</code>\n"
+        f'<a href="tg://user?id={user.id}">Открыть профиль</a>'
+    )
+
+
+async def notify_new_user(
+    bot: Bot,
+    user: Any,
+    admin_ids: set[int] | frozenset[int],
+    store: NotificationStore,
+) -> None:
+    recipient_ids = (set(admin_ids) | set(store.partner_ids())) - {user.id}
+    text = format_new_user_notification(user)
+
+    async def deliver(recipient_id: int) -> None:
+        try:
+            await bot.send_message(recipient_id, text)
+        except TelegramAPIError:
+            logger.exception(
+                "Failed to notify recipient_id=%s about new telegram_user_id=%s",
+                recipient_id,
+                user.id,
+            )
+
+    await asyncio.gather(*(deliver(recipient_id) for recipient_id in recipient_ids))
+
+
+def schedule_new_user_notification(
+    bot: Bot,
+    user: Any,
+    admin_ids: set[int] | frozenset[int],
+    store: NotificationStore,
+) -> None:
+    task = asyncio.create_task(notify_new_user(bot, user, admin_ids, store))
+    _notification_tasks.add(task)
+    task.add_done_callback(_notification_tasks.discard)
 
 
 def format_chat_id_message(chat_id: int, title: str | None, chat_type: object) -> str:
@@ -275,9 +333,77 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
     if is_admin_user(message.from_user, settings.telegram_admin_ids):
         await message.answer("Админ-бот Bloom Club. Выберите действие.", reply_markup=main_menu())
         return
+    user = message.from_user
+    store = get_notification_store()
+    is_new_user = user is not None and store.register_user(
+        user.id,
+        username=getattr(user, "username", None),
+        display_name=telegram_display_name(user),
+    )
     await message.answer(PUBLIC_WELCOME_TEXT)
+    if is_new_user and user is not None and not store.is_partner(user.id):
+        schedule_new_user_notification(message.bot, user, settings.telegram_admin_ids, store)
     await message.answer(PUBLIC_LOGIN_GUIDE_TEXT, reply_markup=public_onboarding_keyboard())
     await message.answer(PUBLIC_SOCIAL_TEXT, reply_markup=public_social_keyboard())
+
+
+@router.message(F.text == "🤝 Выдать права партнёра")
+async def grant_partner_access_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(PartnerAccessGrant.telegram_user_id)
+    await message.answer(
+        "Отправьте Telegram ID пользователя, которому нужно выдать права партнёра.\n\n"
+        "Партнёр будет получать уведомления о новых пользователях."
+    )
+
+
+@router.message(PartnerAccessGrant.telegram_user_id)
+async def grant_partner_access_confirm(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    raw_user_id = (message.text or "").strip()
+    if not raw_user_id.isdigit() or int(raw_user_id) <= 0:
+        await message.answer("Telegram ID должен состоять только из цифр. Отправьте корректный ID.")
+        return
+
+    partner_id = int(raw_user_id)
+    if partner_id in settings.telegram_admin_ids:
+        await state.clear()
+        await message.answer("Этот пользователь уже является администратором.", reply_markup=main_menu())
+        return
+
+    admin_user = message.from_user
+    if admin_user is None:
+        await message.answer("Не удалось определить администратора. Попробуйте ещё раз.")
+        return
+
+    store = get_notification_store()
+    granted = store.grant_partner_access(partner_id, granted_by=admin_user.id)
+    await state.clear()
+    if not granted:
+        await message.answer(
+            f"Пользователю <code>{partner_id}</code> права партнёра уже выданы.",
+            reply_markup=main_menu(),
+        )
+        return
+
+    partner_notified = True
+    try:
+        await message.bot.send_message(
+            partner_id,
+            "🤝 Вам выданы права партнёра Bloom Club.\n"
+            "Теперь вы будете получать уведомления о новых пользователях.",
+        )
+    except TelegramAPIError:
+        partner_notified = False
+        logger.warning("Partner access granted but notification failed for telegram_user_id=%s", partner_id)
+
+    response = f"✅ Пользователю <code>{partner_id}</code> выданы права партнёра."
+    if not partner_notified:
+        response += "\n\nПопросите партнёра сначала открыть бота и нажать /start."
+    await message.answer(response, reply_markup=main_menu())
 
 
 @router.message(Command("chatid"))

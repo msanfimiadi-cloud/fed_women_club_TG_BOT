@@ -9,6 +9,7 @@ def main_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="🖼 Баннеры"), KeyboardButton(text="📚 Справочники")],
             [KeyboardButton(text="➕ Создать партнёра"), KeyboardButton(text="📋 Список партнёров")],
+            [KeyboardButton(text="🤝 Выдать права партнёра")],
             [KeyboardButton(text="🎁 Создать розыгрыш"), KeyboardButton(text="📋 Список розыгрышей")],
             [KeyboardButton(text="🌐 Открыть приложение"), KeyboardButton(text="🏠 Управление главной")],
             [KeyboardButton(text="❌ Отмена")],
