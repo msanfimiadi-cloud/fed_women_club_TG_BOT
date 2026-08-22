@@ -68,3 +68,28 @@ def test_legacy_open_app_button_still_generates_login_code():
 
     assert 'LEGACY_PUBLIC_APP_BUTTON_TEXT = "🌐 Открыть приложение"' in bot
     assert "F.text.in_({PUBLIC_APP_BUTTON_TEXT, LEGACY_PUBLIC_APP_BUTTON_TEXT})" in bot
+
+
+def test_public_onboarding_and_login_code_use_one_message_each():
+    bot = read("admin_bot/bot.py")
+
+    assert "PUBLIC_ONBOARDING_TEXT = (" in bot
+    assert "f\"{PUBLIC_WELCOME_TEXT}\\n\\n\"" in bot
+    assert "f\"{PUBLIC_LOGIN_GUIDE_TEXT}\\n\\n\"" in bot
+    assert "await message.answer(PUBLIC_WELCOME_TEXT)" not in bot
+    assert "await message.answer(result.login_code)" not in bot
+    assert "f\"<code>{escape(result.login_code)}</code>\\n\\n\"" in bot
+
+
+def test_public_messages_and_notifications_have_rate_limits_and_retries():
+    bot = read("admin_bot/bot.py")
+    client = read("admin_bot/login_code.py")
+
+    assert "TelegramRetryAfter" in bot
+    assert "TelegramNetworkError" in bot
+    assert "messages_per_second=15" in bot
+    assert "messages_per_second=10" in bot
+    assert "send_at + 1.05" in bot
+    assert "background=True" in bot
+    assert "max_connections=20" in client
+    assert "timeout=httpx.Timeout(15.0, connect=5.0)" in client
