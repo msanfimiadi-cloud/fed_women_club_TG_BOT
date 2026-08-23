@@ -30,6 +30,7 @@ WEB_API_BASE_URL=https://bloomclub.ru/api/v1
 TELEGRAM_ADMIN_API_TOKEN=
 BOT_SERVICE_TOKEN=
 BROWSER_APP_PUBLIC_URL=https://app.bloomclub.ru
+BLOOM_ONLINE_PUBLIC_URL=https://online.bloomclub.ru
 ```
 
 Переменные:
@@ -40,6 +41,7 @@ BROWSER_APP_PUBLIC_URL=https://app.bloomclub.ru
 - `WEB_API_BASE_URL` — базовый URL публичного WEB API для server-to-server Login Code endpoint.
 - `BOT_SERVICE_TOKEN` — сервисный Bearer-токен бота для `POST /api/v1/internal/login-code`.
 - `BROWSER_APP_PUBLIC_URL` — публичный URL browser-приложения; по умолчанию `https://app.bloomclub.ru`.
+- `BLOOM_ONLINE_PUBLIC_URL` — адрес сервиса онлайн-записи для автоматической привязки личных Telegram-уведомлений.
 - `TELEGRAM_ADMIN_API_TOKEN` — токен для WEB Content Admin API.
 
 При обращении к WEB API бот отправляет заголовки:
@@ -86,6 +88,12 @@ python -m admin_bot
 ```text
 Нет доступа.
 ```
+
+## Личные уведомления Bloom Online
+
+Партнёр открывает кабинет Bloom Online, переходит в раздел Telegram-уведомлений и нажимает «Подключить Telegram». Сервис выдаёт одноразовую ссылку, после перехода по которой существующий бот автоматически связывает личный Telegram-диалог с организацией партнёра. Ссылка действует 15 минут и повторно не используется. Новые записи, отмены и изменения приходят в тот же личный диалог; вручную вводить chat ID не требуется.
+
+Для работы на сервере бота задайте `BLOOM_ONLINE_PUBLIC_URL`, а на сервере Bloom Online — тот же `TELEGRAM_BOT_TOKEN`, который использует бот.
 
 ## Уведомления о новых пользователях
 

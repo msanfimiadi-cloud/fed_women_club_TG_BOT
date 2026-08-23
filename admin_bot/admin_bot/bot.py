@@ -100,6 +100,7 @@ from .states import (
     AdminSearch,
 )
 from .login_code import LoginCodeClient, LoginCodeError, LoginCodeIdentity
+from .booking_notifications import BookingNotificationError, booking_link_token, connect_booking_notifications
 from .notification_store import NotificationStore
 from .web_api import ContentAdminApiClient, WebApiError
 
@@ -398,6 +399,10 @@ def privilege_code_user_error(exc: WebApiError) -> str:
 @router.message(Command("start", "admin"))
 async def start(message: Message, state: FSMContext, settings: Settings) -> None:
     await state.clear()
+    token = booking_link_token(message.text)
+    if token:
+        await handle_booking_notification_link(message, settings, token)
+        return
     if is_admin_user(message.from_user, settings.telegram_admin_ids):
         await message.answer("Админ-бот Bloom Club. Выберите действие.", reply_markup=main_menu())
         return
@@ -415,6 +420,35 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
     )
     if is_new_user and user is not None and not store.is_partner(user.id):
         schedule_new_user_notification(message.bot, user, settings.telegram_admin_ids, store)
+
+
+async def handle_booking_notification_link(message: Message, settings: Settings, token: str) -> None:
+    user = message.from_user
+    if user is None or getattr(message.chat, "type", "") != "private":
+        await message.answer("Подключите уведомления в личном диалоге с ботом.")
+        return
+    public_url = settings.bloom_online_public_url
+    if not public_url:
+        await message.answer("Подключение Bloom Online пока не настроено. Обратитесь к администратору.")
+        return
+    try:
+        organization = await connect_booking_notifications(
+            public_url=public_url,
+            bot_token=settings.telegram_bot_token,
+            link_token=token,
+            chat_id=message.chat.id,
+            telegram_user_id=user.id,
+            username=getattr(user, "username", None),
+            display_name=telegram_display_name(user),
+        )
+    except BookingNotificationError as exc:
+        await message.answer(f"❌ {escape(str(exc))}")
+        return
+    await message.answer(
+        "✅ <b>Уведомления Bloom Online подключены</b>\n\n"
+        f"Партнёр: <b>{escape(organization)}</b>\n"
+        "Теперь новые записи, отмены и изменения будут приходить в этот личный диалог."
+    )
 
 
 @router.message(F.text == "🤝 Выдать права партнёра")

@@ -20,6 +20,7 @@ class Settings:
     bot_service_token: str
     browser_app_public_url: str
     telegram_catalog_api_base_url: str | None = None
+    bloom_online_public_url: str | None = None
     max_upload_size_mb: int = 10
 
 
@@ -58,4 +59,5 @@ def load_settings() -> Settings:
         bot_service_token=_required("BOT_SERVICE_TOKEN"),
         browser_app_public_url=(os.getenv("BROWSER_APP_PUBLIC_URL", "https://app.bloomclub.ru").strip().rstrip("/") or "https://app.bloomclub.ru"),
         telegram_catalog_api_base_url=(os.getenv("TELEGRAM_CATALOG_API_BASE_URL", "").strip().rstrip("/") or None),
+        bloom_online_public_url=(os.getenv("BLOOM_ONLINE_PUBLIC_URL", "").strip().rstrip("/") or None),
     )
