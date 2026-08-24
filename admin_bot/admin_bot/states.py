@@ -33,6 +33,11 @@ class PartnerAccessGrant(StatesGroup):
     telegram_user_id = State()
 
 
+class AdvertiserCreate(StatesGroup):
+    telegram_user_id = State()
+    name = State()
+
+
 class PartnerPhotoAdd(StatesGroup):
     photo = State()
 

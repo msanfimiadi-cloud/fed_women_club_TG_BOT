@@ -4,6 +4,7 @@ import asyncio
 from html import escape
 import json
 import logging
+import re
 from datetime import datetime
 import tempfile
 import csv
@@ -98,6 +99,7 @@ from .states import (
     PrivilegeCodeEdit,
     SortOrderManual,
     AdminSearch,
+    AdvertiserCreate,
 )
 from .login_code import LoginCodeClient, LoginCodeError, LoginCodeIdentity
 from .booking_notifications import BookingNotificationError, booking_link_token, connect_booking_notifications, connect_customer_booking_notifications, customer_booking_link_token
@@ -115,6 +117,7 @@ _browser_app_public_url = "https://app.bloomclub.ru"
 
 PUBLIC_APP_BUTTON_TEXT = "🔐 Получить код для входа"
 LEGACY_PUBLIC_APP_BUTTON_TEXT = "🌐 Открыть приложение"
+ADVERTISER_STATS_BUTTON_TEXT = "📊 Моя статистика"
 
 PUBLIC_WELCOME_TEXT = (
     "🌸 <b>Добро пожаловать в Bloom Club!</b>\n\n"
@@ -210,9 +213,12 @@ async def send_telegram_message(
             await asyncio.sleep(0.5 * (attempt + 1))
 
 
-def public_onboarding_keyboard() -> ReplyKeyboardMarkup:
+def public_onboarding_keyboard(*, advertiser: bool = False) -> ReplyKeyboardMarkup:
+    buttons = [[KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)]]
+    if advertiser:
+        buttons.append([KeyboardButton(text=ADVERTISER_STATS_BUTTON_TEXT)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)]],
+        keyboard=buttons,
         resize_keyboard=True,
     )
 
@@ -260,6 +266,13 @@ class AdminOnlyMiddleware(BaseMiddleware):
         user = data.get("event_from_user")
         if is_public_onboarding_event(event):
             return await handler(event, data)
+        if (
+            isinstance(event, Message)
+            and user is not None
+            and (event.text or "").strip() in {ADVERTISER_STATS_BUTTON_TEXT, "/stats"}
+            and get_notification_store().is_advertiser(user.id)
+        ):
+            return await handler(event, data)
         if not is_admin_user(user, self._admin_ids):
             if isinstance(event, Message):
                 await event.answer("Нет доступа.")
@@ -296,17 +309,39 @@ def telegram_display_name(user: Any) -> str | None:
     return display_name or getattr(user, "full_name", None) or None
 
 
-def format_new_user_notification(user: Any) -> str:
+def advertiser_referral_code(message_text: str | None) -> str | None:
+    match = re.fullmatch(
+        r"/start(?:@[A-Za-z0-9_]+)?\s+(ad_[A-Za-z0-9_-]{8,48})",
+        (message_text or "").strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def format_new_user_notification(
+    user: Any,
+    advertiser: dict[str, Any] | None = None,
+) -> str:
     name = escape(telegram_display_name(user) or "Не указано")
     username = getattr(user, "username", None)
     username_text = f"@{escape(str(username))}" if username else "не указан"
-    return (
+    text = (
         "🆕 <b>Новый пользователь запустил Bloom Club</b>\n\n"
         f"Имя: {name}\n"
         f"Username: {username_text}\n"
         f"Telegram ID: <code>{user.id}</code>\n"
         f'<a href="tg://user?id={user.id}">Открыть профиль</a>'
     )
+    if advertiser is not None:
+        text += (
+            "\n\n📣 <b>Переход по рекламной ссылке</b>\n"
+            f"Рекламодатель: <b>{escape(str(advertiser['name']))}</b>\n"
+            f"Telegram ID рекламодателя: <code>{int(advertiser['telegram_user_id'])}</code>"
+        )
+        if advertiser.get("link"):
+            text += f"\nСсылка: {escape(str(advertiser['link']))}"
+    else:
+        text += "\n\nИсточник: прямой переход"
+    return text
 
 
 async def notify_new_user(
@@ -314,9 +349,13 @@ async def notify_new_user(
     user: Any,
     admin_ids: set[int] | frozenset[int],
     store: NotificationStore,
+    advertiser: dict[str, Any] | None = None,
 ) -> None:
     recipient_ids = (set(admin_ids) | set(store.partner_ids())) - {user.id}
-    text = format_new_user_notification(user)
+    if advertiser is not None:
+        recipient_ids.add(int(advertiser["telegram_user_id"]))
+        recipient_ids.discard(user.id)
+    text = format_new_user_notification(user, advertiser)
 
     async def deliver(recipient_id: int) -> None:
         try:
@@ -338,8 +377,9 @@ def schedule_new_user_notification(
     user: Any,
     admin_ids: set[int] | frozenset[int],
     store: NotificationStore,
+    advertiser: dict[str, Any] | None = None,
 ) -> None:
-    task = asyncio.create_task(notify_new_user(bot, user, admin_ids, store))
+    task = asyncio.create_task(notify_new_user(bot, user, admin_ids, store, advertiser))
     _notification_tasks.add(task)
     task.add_done_callback(_notification_tasks.discard)
 
@@ -412,18 +452,38 @@ async def start(message: Message, state: FSMContext, settings: Settings) -> None
         return
     user = message.from_user
     store = get_notification_store()
-    is_new_user = user is not None and store.register_user(
-        user.id,
-        username=getattr(user, "username", None),
-        display_name=telegram_display_name(user),
-    )
+    is_new_user = False
+    advertiser = None
+    if user is not None:
+        is_new_user, advertiser = store.register_referred_user(
+            user.id,
+            username=getattr(user, "username", None),
+            display_name=telegram_display_name(user),
+            referral_code=advertiser_referral_code(message.text),
+        )
+        if advertiser is not None:
+            bot_profile = await message.bot.get_me()
+            advertiser["link"] = (
+                f"https://t.me/{bot_profile.username}?start={advertiser['referral_code']}"
+            )
+    is_advertiser = user is not None and store.is_advertiser(user.id)
     await send_telegram_message(
         message.answer,
         PUBLIC_ONBOARDING_TEXT,
-        reply_markup=public_onboarding_keyboard(),
+        reply_markup=public_onboarding_keyboard()
+        if not is_advertiser
+        else public_onboarding_keyboard(advertiser=True),
     )
-    if is_new_user and user is not None and not store.is_partner(user.id):
-        schedule_new_user_notification(message.bot, user, settings.telegram_admin_ids, store)
+    if is_advertiser:
+        await send_telegram_message(
+            message.answer,
+            "📣 Вы подключены как рекламодатель Bloom Club. "
+            "Нажмите «📊 Моя статистика», чтобы посмотреть переходы по своей ссылке.",
+        )
+    if is_new_user and user is not None and not store.is_partner(user.id) and not is_advertiser:
+        schedule_new_user_notification(
+            message.bot, user, settings.telegram_admin_ids, store, advertiser
+        )
 
 
 async def handle_booking_notification_link(message: Message, settings: Settings, token: str) -> None:
@@ -547,6 +607,147 @@ async def grant_partner_access_confirm(
     await message.answer(response, reply_markup=main_menu())
 
 
+@router.message(F.text == "📣 Добавить рекламодателя")
+async def add_advertiser_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(AdvertiserCreate.telegram_user_id)
+    await message.answer(
+        "📣 <b>Добавление рекламодателя</b>\n\n"
+        "Отправьте Telegram ID рекламодателя. "
+        "Он будет получать уведомления только о пользователях, "
+        "которые придут по его персональной ссылке."
+    )
+
+
+@router.message(AdvertiserCreate.telegram_user_id)
+async def add_advertiser_id(message: Message, state: FSMContext) -> None:
+    raw_user_id = (message.text or "").strip()
+    if not raw_user_id.isdigit() or int(raw_user_id) <= 0:
+        await message.answer("Telegram ID должен состоять только из цифр. Отправьте корректный ID.")
+        return
+    await state.update_data(advertiser_telegram_user_id=int(raw_user_id))
+    await state.set_state(AdvertiserCreate.name)
+    await message.answer("Введите имя рекламодателя или название рекламного источника.")
+
+
+@router.message(AdvertiserCreate.name)
+async def add_advertiser_name(message: Message, state: FSMContext) -> None:
+    name = (message.text or "").strip()
+    if not name or len(name) > 100:
+        await message.answer("Укажите имя рекламодателя длиной от 1 до 100 символов.")
+        return
+    admin_user = message.from_user
+    if admin_user is None:
+        await message.answer("Не удалось определить администратора. Попробуйте ещё раз.")
+        return
+    data = await state.get_data()
+    advertiser_id = int(data.get("advertiser_telegram_user_id") or 0)
+    advertiser = get_notification_store().add_advertiser(
+        advertiser_id,
+        name=name,
+        created_by=admin_user.id,
+    )
+    bot_profile = await message.bot.get_me()
+    link = f"https://t.me/{bot_profile.username}?start={advertiser['referral_code']}"
+    await state.clear()
+
+    advertiser_notified = True
+    try:
+        await message.bot.send_message(
+            advertiser_id,
+            "📣 <b>Вы подключены как рекламодатель Bloom Club</b>\n\n"
+            f"Имя: <b>{escape(str(advertiser['name']))}</b>\n"
+            f"Ваша персональная ссылка:\n{escape(link)}\n\n"
+            "Вы будете получать уведомления только о новых пользователях, "
+            "которые придут по этой ссылке.\n"
+            "Для просмотра статистики нажмите /stats.",
+            reply_markup=public_onboarding_keyboard(advertiser=True),
+        )
+    except TelegramAPIError:
+        advertiser_notified = False
+        logger.warning(
+            "Advertiser created but notification failed for telegram_user_id=%s",
+            advertiser_id,
+        )
+
+    response = (
+        "✅ <b>Рекламодатель добавлен</b>\n\n"
+        f"Имя: <b>{escape(str(advertiser['name']))}</b>\n"
+        f"Telegram ID: <code>{advertiser_id}</code>\n"
+        f"Персональная ссылка:\n{escape(link)}"
+    )
+    if not advertiser_notified:
+        response += "\n\nПопросите рекламодателя сначала открыть бота и нажать /start."
+    await message.answer(response, reply_markup=main_menu())
+
+
+def format_advertiser_statistics(
+    statistics: dict[str, Any],
+    *,
+    bot_username: str,
+    include_recent_users: bool = True,
+) -> str:
+    link = f"https://t.me/{bot_username}?start={statistics['referral_code']}"
+    text = (
+        f"📣 <b>{escape(str(statistics['name']))}</b>\n"
+        f"Telegram ID: <code>{int(statistics['telegram_user_id'])}</code>\n"
+        f"Ссылка: {escape(link)}\n\n"
+        f"Сегодня: <b>{int(statistics['today'])}</b>\n"
+        f"За 7 дней: <b>{int(statistics['last_7_days'])}</b>\n"
+        f"За 30 дней: <b>{int(statistics['last_30_days'])}</b>\n"
+        f"Всего: <b>{int(statistics['total'])}</b>"
+    )
+    if include_recent_users and statistics.get("recent_users"):
+        text += "\n\n<b>Последние пользователи:</b>"
+        for user in statistics["recent_users"]:
+            display_name = escape(str(user.get("display_name") or "Без имени"))
+            username = user.get("username")
+            username_text = f" · @{escape(str(username))}" if username else ""
+            text += f"\n• {display_name}{username_text}"
+    return text
+
+
+@router.message(F.text == "📊 Статистика рекламы")
+async def advertiser_statistics_admin(message: Message) -> None:
+    entries = get_notification_store().all_advertiser_statistics()
+    if not entries:
+        await message.answer("Рекламодателей пока нет. Нажмите «📣 Добавить рекламодателя».")
+        return
+    bot_profile = await message.bot.get_me()
+    total = sum(int(item["total"]) for item in entries)
+    await message.answer(
+        "📊 <b>Статистика по рекламодателям</b>\n\n"
+        f"Рекламодателей: <b>{len(entries)}</b>\n"
+        f"Приведено пользователей: <b>{total}</b>"
+    )
+    for statistics in entries:
+        await message.answer(
+            format_advertiser_statistics(
+                statistics,
+                bot_username=bot_profile.username,
+                include_recent_users=False,
+            )
+        )
+
+
+@router.message(F.text.in_({ADVERTISER_STATS_BUTTON_TEXT, "/stats"}))
+async def advertiser_statistics_personal(message: Message) -> None:
+    user = message.from_user
+    statistics = (
+        get_notification_store().advertiser_statistics(user.id)
+        if user is not None
+        else None
+    )
+    if statistics is None:
+        await message.answer("Для вашего профиля не подключена рекламная ссылка.")
+        return
+    bot_profile = await message.bot.get_me()
+    await message.answer(
+        "📊 <b>Ваша рекламная статистика</b>\n\n"
+        + format_advertiser_statistics(statistics, bot_username=bot_profile.username)
+    )
+
+
 @router.message(Command("chatid"))
 async def chat_id(message: Message) -> None:
     chat_type = getattr(message.chat.type, "value", message.chat.type)
@@ -605,6 +806,14 @@ async def open_browser_app(message: Message) -> None:
     user = message.from_user
     if user is None:
         await message.answer("Не удалось определить пользователя Telegram. Попробуйте позже.")
+        return
+    allowed, retry_after = get_notification_store().reserve_login_code_request(user.id)
+    if not allowed:
+        minutes = max(1, (retry_after + 59) // 60)
+        await message.answer(
+            "⏳ Слишком много запросов кода. "
+            f"Попробуйте снова через {minutes} мин."
+        )
         return
     identity = LoginCodeIdentity(
         provider="telegram",

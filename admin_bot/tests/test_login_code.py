@@ -122,12 +122,13 @@ def test_backend_unavailable_raises_required_error(status_code):
     asyncio.run(run())
 
 
-def test_public_app_button_sends_copyable_login_code_messages(monkeypatch):
+def test_public_app_button_sends_copyable_login_code_messages(monkeypatch, tmp_path):
     async def run():
         from types import SimpleNamespace
 
         from admin_bot import bot as bot_module
         from admin_bot.login_code import LoginCodeResult
+        from admin_bot.notification_store import NotificationStore
 
         class FakeLoginCodeClient:
             async def create_login_code(self, identity):
@@ -150,6 +151,11 @@ def test_public_app_button_sends_copyable_login_code_messages(monkeypatch):
                 self.answers.append((text, reply_markup))
 
         monkeypatch.setattr(bot_module, "get_login_code_client", lambda: FakeLoginCodeClient())
+        monkeypatch.setattr(
+            bot_module,
+            "get_notification_store",
+            lambda: NotificationStore(tmp_path / "notifications.sqlite3"),
+        )
         message = FakeMessage()
 
         await bot_module.open_browser_app(message)
