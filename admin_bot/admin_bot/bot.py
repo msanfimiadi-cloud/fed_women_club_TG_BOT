@@ -282,6 +282,36 @@ class AdminOnlyMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+class AdminMenuNavigationMiddleware(BaseMiddleware):
+    """Clear an unfinished form before state filters can consume menu buttons."""
+
+    def __init__(self) -> None:
+        self._menu_texts = {
+            button.text for row in main_menu().keyboard for button in row
+        } | {LEGACY_PUBLIC_APP_BUTTON_TEXT, "🏠 Главная"}
+
+    async def __call__(self, handler, event: Message, data: dict[str, Any]) -> Any:
+        settings = data.get("settings")
+        state = data.get("state")
+        text = event.text or ""
+        is_cancel = text.split(maxsplit=1)[0] == "/cancel" if text else False
+        # Authorization still runs in AdminOnlyMiddleware; non-admin input
+        # must never gain access to the administrative navigation path.
+        if (
+            settings is not None
+            and is_admin_user(event.from_user, settings.telegram_admin_ids)
+            and state is not None
+            and (text in self._menu_texts or is_cancel)
+        ):
+            await state.clear()
+            # FSM middleware has already cached the state for this update.
+            data["raw_state"] = None
+        return await handler(event, data)
+
+
+router.message.outer_middleware(AdminMenuNavigationMiddleware())
+
+
 def get_api(message_or_callback: Message | CallbackQuery) -> ContentAdminApiClient:
     if _content_api is None:
         raise RuntimeError("Content API client is not initialized")
