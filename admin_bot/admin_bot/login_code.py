@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class LoginCodeError(RuntimeError):
@@ -52,23 +56,34 @@ class LoginCodeClient:
         if identity.username:
             payload["username"] = identity.username
 
-        try:
-            response = await self._client.post("/internal/login-code", json=payload)
-        except httpx.TimeoutException as exc:
-            raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.") from exc
-        except httpx.HTTPError as exc:
-            raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.") from exc
+        # Only retry connection establishment: a read/write failure may mean
+        # the server already created a code, so replaying that POST is unsafe.
+        for attempt in range(1, 4):
+            try:
+                response = await self._client.post("/internal/login-code", json=payload)
+                break
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                logger.warning("Login code connection failed attempt=%s/3 error_type=%s", attempt, type(exc).__name__)
+                if attempt == 3:
+                    raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.") from exc
+                await asyncio.sleep(0.5 * attempt)
+            except httpx.HTTPError as exc:
+                logger.warning("Login code request failed error_type=%s", type(exc).__name__)
+                raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.") from exc
 
         if response.status_code >= 400:
+            logger.warning("Login code HTTP failure status=%s", response.status_code)
             raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.")
 
         try:
             data = response.json()
         except ValueError as exc:
+            logger.warning("Login code response invalid reason=non_json status=%s", response.status_code)
             raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.") from exc
 
         result = self._extract_result(data)
         if result is None:
+            logger.warning("Login code response invalid reason=missing_fields status=%s", response.status_code)
             raise LoginCodeError("Не удалось получить код входа.\n\nПопробуйте позже.")
         return result
 
