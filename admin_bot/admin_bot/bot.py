@@ -18,7 +18,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramR
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup, TelegramObject
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup, TelegramObject, WebAppInfo
 from aiogram.client.default import DefaultBotProperties
 
 from .config import Settings, load_settings
@@ -130,6 +130,8 @@ PUBLIC_WELCOME_TEXT = (
 
 PUBLIC_LOGIN_GUIDE_TEXT = (
     "<b>Как войти в приложение:</b>\n"
+    "Откройте «🌸 Открыть в Telegram» — вход без копирования кода.\n"
+    "Для входа через сайт:\n"
     "1. Нажмите «🔐 Получить код для входа».\n"
     "2. Скопируйте код — он действует 5 минут.\n"
     "3. Откройте приложение по кнопке под кодом.\n"
@@ -214,7 +216,10 @@ async def send_telegram_message(
 
 
 def public_onboarding_keyboard(*, advertiser: bool = False) -> ReplyKeyboardMarkup:
-    buttons = [[KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)]]
+    buttons = [
+        [KeyboardButton(text="🌸 Открыть в Telegram", web_app=WebAppInfo(url=_browser_app_public_url))],
+        [KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)],
+    ]
     if advertiser:
         buttons.append([KeyboardButton(text=ADVERTISER_STATS_BUTTON_TEXT)])
     return ReplyKeyboardMarkup(
@@ -874,7 +879,10 @@ async def open_browser_app(message: Message) -> None:
         "Чтобы добавить Bloom Club на экран телефона, откройте приложение "
         "во внешнем браузере: нажмите <b>⋯ → Открыть в браузере</b>.",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🌐 Открыть приложение", url=_browser_app_public_url)]]
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🌐 Открыть приложение", url=_browser_app_public_url)],
+                [InlineKeyboardButton(text="🌸 Открыть в Telegram", web_app=WebAppInfo(url=_browser_app_public_url))],
+            ]
         ),
     )
 
