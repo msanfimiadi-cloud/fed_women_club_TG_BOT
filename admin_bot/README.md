@@ -1,5 +1,11 @@
 # Bloom Club Telegram Admin Bot
 
+## Единый сайт и Telegram Mini App
+
+Кнопка «🌸 Открыть в Telegram» открывает актуальное приложение по
+`BROWSER_APP_PUBLIC_URL` внутри Telegram, а получение кода для сайта остаётся.
+Подготовка сервера и проверка общего профиля описаны в [SHARED_MINIAPP.md](../SHARED_MINIAPP.md).
+
 Отдельный Telegram-бот для управления контентом Bloom Club / Женский клуб НСК. Бот работает как сервер-сервер интеграция: администратор управляет данными в Telegram, бот обращается к WEB Content Admin API, а клиентский Telegram Mini App остаётся только клиентским приложением.
 
 ## Назначение
