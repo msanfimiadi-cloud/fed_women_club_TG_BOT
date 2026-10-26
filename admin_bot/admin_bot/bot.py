@@ -219,6 +219,7 @@ def public_onboarding_keyboard(*, advertiser: bool = False) -> ReplyKeyboardMark
     buttons = [
         [KeyboardButton(text="🌸 Открыть в Telegram", web_app=WebAppInfo(url=_browser_app_public_url))],
         [KeyboardButton(text=PUBLIC_APP_BUTTON_TEXT)],
+        [KeyboardButton(text="Режим подтверждения привилегий для ПАРТНЁРОВ")],
     ]
     if advertiser:
         buttons.append([KeyboardButton(text=ADVERTISER_STATS_BUTTON_TEXT)])
@@ -3471,6 +3472,9 @@ async def main() -> None:
     _login_code = LoginCodeClient(settings.web_api_base_url, settings.bot_service_token)
     _browser_app_public_url = settings.browser_app_public_url
     dp = Dispatcher(storage=MemoryStorage(), settings=settings)
+    from .partner_confirmation import router as confirmation_router
+    confirmation_router.message.outer_middleware(AdminMenuNavigationMiddleware())
+    dp.include_router(confirmation_router)
     router.message.middleware(AdminOnlyMiddleware(settings.telegram_admin_ids))
     router.callback_query.middleware(AdminOnlyMiddleware(settings.telegram_admin_ids))
     dp.include_router(router)
