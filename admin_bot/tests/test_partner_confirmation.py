@@ -41,8 +41,7 @@ def test_login_member_and_confirmation(monkeypatch):
     async def run():
         api = AsyncMock(side_effect=[
             {"partner_name": "XFIT"},
-            {"name": "Анна", "subscription_active": True, "offers": [{"id": 5, "title": "Карта"}], "used_today": 0},
-            {"name": "Анна", "title": "Карта", "token": "a"*32, "used_today": 0},
+            {"name": "Анна", "subscription_active": True, "title": "Карта", "token": "a"*43, "used_today": 0},
             {"ok": True}])
         monkeypatch.setattr(mod, "api", api)
         s = state()
@@ -52,15 +51,16 @@ def test_login_member_and_confirmation(monkeypatch):
         await mod.start_confirmation(message, s)
         message.text = "000001"
         await mod.lookup(message, s, None)
-        assert await s.get_state() == mod.Flow.select_offer.state
-        callback = SimpleNamespace(from_user=message.from_user, message=message, data="pcab:offer:5", answer=AsyncMock())
+        assert api.call_args.args[2] == "/coupon"
+        assert api.call_args.args[3]["code"] == "000001"
+        callback = SimpleNamespace(from_user=message.from_user, message=message, data="", answer=AsyncMock())
         message.edit_reply_markup = AsyncMock()
-        await mod.prepare(callback, s, None)
         assert await s.get_state() == mod.Flow.confirm.state
-        callback.data = "pcab:confirm:" + "a"*32 + ":0"
+        callback.data = "pcab:confirm:" + "a"*43 + ":0"
         await mod.confirm(callback, s, None)
         assert await s.get_state() is None
         assert api.call_args.args[3]["allow_repeat"] is False
+        assert api.call_args.args[2] == "/coupon/confirm"
     asyncio.run(run())
 
 

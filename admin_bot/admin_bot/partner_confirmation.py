@@ -197,22 +197,8 @@ async def login(message: Message, state: FSMContext, settings):
 async def start_confirmation(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(Flow.member)
-    await message.answer("Введите шестизначный номер участницы с электронной карты. /cancel — отмена.",
+    await message.answer("Введите шестизначный код купона, который показывает клиент. Это код привилегии, а не номер участницы. /cancel — отмена.",
         reply_markup=menu())
-
-
-async def show_offers(message, state, page_number=0):
-    data = await state.get_data()
-    offers = data["offers"]
-    builder = InlineKeyboardBuilder()
-    for offer in offers[page_number*10:page_number*10+10]:
-        builder.button(text=offer["title"][:55], callback_data=f"pcab:offer:{offer['id']}")
-    if page_number:
-        builder.button(text="← Назад", callback_data=f"pcab:offers:{page_number-1}")
-    if (page_number+1)*10 < len(offers):
-        builder.button(text="Далее →", callback_data=f"pcab:offers:{page_number+1}")
-    builder.adjust(1)
-    await message.answer("Выберите привилегию:", reply_markup=builder.as_markup())
 
 
 @router.message(Flow.member, F.text, ~F.text.startswith("/"))
@@ -221,48 +207,24 @@ async def lookup(message: Message, state: FSMContext, settings):
     if len(number) != 6 or not number.isascii() or not number.isdigit():
         await message.answer("Введите ровно 6 цифр, например 000049.")
         return
-    result = await api(settings, "POST", "/member", {**identity(message), "member_number": number})
-    await message.answer(f"Участница: {escape(result['name'])}\nПодписка: " +
-        ("активна" if result["subscription_active"] else "неактивна — подтверждение недоступно."))
-    if not result["subscription_active"] or not result["offers"]:
-        if result["subscription_active"]:
-            await message.answer("У партнёра нет активных привилегий.")
+    result = await api(settings, "POST", "/coupon", {**identity(message), "code": number})
+    if not result["subscription_active"]:
+        await message.answer("Подписка неактивна — подтверждение недоступно.")
         return
-    await state.update_data(member_number=number, offers=result["offers"])
-    await state.set_state(Flow.select_offer)
-    await show_offers(message, state)
-
-
-@router.callback_query(Flow.select_offer, F.data.startswith("pcab:offers:"))
-async def offer_page(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await show_offers(callback.message, state, int(callback.data.rsplit(":", 1)[1]))
+    await state.update_data(token=result["token"], repeat=bool(result["used_today"]))
+    await state.set_state(Flow.confirm)
+    warning = ("\n\nСегодня уже было подтверждение. Подтверждайте только ДРУГУЮ покупку."
+        if result["used_today"] else "")
+    await message.answer(f"Участница: {escape(result['name'])}\n"
+        f"Привилегия: {escape(result['title'])}\nПодписка активна."
+        f"{warning}\n\nУслуга оформлена на условиях привилегии?",
+        reply_markup=final_buttons(result["token"], bool(result["used_today"])))
 
 
 def final_buttons(token, repeat=False):
     builder = InlineKeyboardBuilder()
     builder.button(text=CONFIRM, callback_data=f"pcab:confirm:{token}:{int(repeat)}")
     return builder.as_markup()
-
-
-@router.callback_query(Flow.select_offer, F.data.startswith("pcab:offer:"))
-async def prepare(callback: CallbackQuery, state: FSMContext, settings):
-    offer_id = int(callback.data.rsplit(":", 1)[1])
-    data = await state.get_data()
-    if not any(o["id"] == offer_id for o in data["offers"]):
-        await callback.answer("Привилегия недоступна.", show_alert=True)
-        return
-    result = await api(settings, "POST", "/prepare", {**identity(callback),
-        "member_number": data["member_number"], "offer_id": offer_id})
-    await state.update_data(token=result["token"], repeat=bool(result["used_today"]))
-    await state.set_state(Flow.confirm)
-    await callback.answer()
-    warning = ("\n\nСегодня уже было подтверждение. Подтверждайте только ДРУГУЮ покупку."
-        if result["used_today"] else "")
-    await callback.message.answer(f"Участница: {escape(result['name'])}\n"
-        f"Привилегия: {escape(result['title'])}\nПодписка активна."
-        f"{warning}\n\nУслуга оформлена на условиях привилегии?",
-        reply_markup=final_buttons(result["token"], bool(result["used_today"])))
 
 
 @router.callback_query(Flow.confirm, F.data.startswith("pcab:confirm:"))
@@ -272,7 +234,7 @@ async def confirm(callback: CallbackQuery, state: FSMContext, settings):
     if parts[2] != data.get("token") or (parts[3] == "1" and not data.get("repeat")):
         await callback.answer("Откройте новое подтверждение.", show_alert=True)
         return
-    result = await api(settings, "POST", "/confirm", {**identity(callback),
+    result = await api(settings, "POST", "/coupon/confirm", {**identity(callback),
         "token": data["token"], "allow_repeat": parts[3] == "1"})
     await callback.answer()
     if result.get("repeat_confirmation_required"):
