@@ -1,5 +1,7 @@
 """Private-chat-only confirmation flow, separate from admin content forms."""
 from html import escape
+from decimal import Decimal, InvalidOperation
+import asyncio
 import httpx
 from aiogram import Router, F, BaseMiddleware
 from aiogram.filters import StateFilter
@@ -23,6 +25,7 @@ class Flow(StatesGroup):
     member = State()
     select_offer = State()
     confirm = State()
+    amount = State()
 
 
 class ApiError(Exception):
@@ -211,20 +214,149 @@ async def lookup(message: Message, state: FSMContext, settings):
     if not result["subscription_active"]:
         await message.answer("Подписка неактивна — подтверждение недоступно.")
         return
-    await state.update_data(token=result["token"], repeat=bool(result["used_today"]))
+    await state.update_data(token=result["token"], repeat=bool(result["used_today"]), amount_revision=result.get("amount_revision", 0))
+    if result.get("requires_order_amount"):
+        await state.set_state(Flow.amount)
+        await message.answer(f"Услуга: {escape(result['title'])}\nВведите фактическую стоимость покупки или услуги БЕЗ учёта скидки Bloom Club, в рублях. Скидку бот рассчитает автоматически. Например: 10000.")
+        return
     await state.set_state(Flow.confirm)
     warning = ("\n\nСегодня уже было подтверждение. Подтверждайте только ДРУГУЮ покупку."
         if result["used_today"] else "")
-    await message.answer(f"Участница: {escape(result['name'])}\n"
-        f"Привилегия: {escape(result['title'])}\nПодписка активна."
-        f"{warning}\n\nУслуга оформлена на условиях привилегии?",
+    await message.answer(coupon_summary(result) + warning +
+        "\n\nСверьте услугу и суммы с фактическим заказом. Если данные неверны, не подтверждайте: попросите клиента открыть новый купон с правильной суммой.\n\nУслуга оформлена на указанных условиях?",
         reply_markup=final_buttons(result["token"], bool(result["used_today"])))
 
 
-def final_buttons(token, repeat=False):
+def money(value):
+    try:
+        amount = Decimal(str(value))
+        if not amount.is_finite() or amount < 0:
+            return "не указана"
+        return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+    except (InvalidOperation, ValueError):
+        return "не указана"
+
+
+def coupon_summary(result):
+    lines = [f"Участница: {escape(result['name'])}",
+             f"Услуга: {escape(result['title'])}", "Подписка активна."]
+    if result.get("code"):
+        lines.append(f"Код купона: {escape(str(result['code']))}")
+    if result.get("is_gift"):
+        lines.append("Тип привилегии: подарок. Проверьте выполнение условий получения подарка.")
+    else:
+        lines.extend([f"Стоимость без скидки: {money(result.get('base_price'))}",
+                      f"Скидка: {money(result.get('saving_amount'))}",
+                      f"Стоимость со скидкой: {money(result.get('final_price'))}"])
+        if result.get("requires_order_amount"):
+            lines.append("⚠️ Для этой привилегии сумму заказа указывает клиент. Обязательно проверьте её перед подтверждением.")
+    return "\n".join(lines)
+
+
+def final_buttons(token, repeat=False, revision=None):
     builder = InlineKeyboardBuilder()
-    builder.button(text=CONFIRM, callback_data=f"pcab:confirm:{token}:{int(repeat)}")
+    suffix = f":{revision}" if revision is not None else ""
+    builder.button(text=CONFIRM, callback_data=f"pcab:confirm:{token}:{int(repeat)}{suffix}")
+    if revision is not None:
+        builder.button(text="Исправить сумму", callback_data=f"pcab:amount:{token}")
+    builder.button(text="Не подтверждать", callback_data="pcab:cancel")
+    builder.adjust(1)
     return builder.as_markup()
+
+
+def review_buttons(token):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Проверить согласование", callback_data=f"pcab:check:{token}")
+    builder.button(text="Исправить сумму", callback_data=f"pcab:amount:{token}")
+    builder.button(text="Не подтверждать", callback_data="pcab:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+async def show_amount_result(message, state, result):
+    revision = result['amount_revision']
+    await state.update_data(amount_revision=revision, repeat=bool(result['used_today']))
+    await state.set_state(Flow.confirm)
+    if result['amount_review_status'] in ('matched', 'accepted'):
+        await message.answer(coupon_summary(result) + "\n\nСумма согласована. Услуга оформлена на этих условиях?",
+            reply_markup=final_buttons(result['token'], bool(result['used_today']), revision))
+    elif result['amount_review_status'] == 'rejected':
+        await message.answer("Клиент не согласен с суммой. Уточните стоимость БЕЗ скидки и нажмите «Исправить сумму».", reply_markup=review_buttons(result['token']))
+    else:
+        await message.answer("⚠️ Сумма отличается от указанной клиентом.\n"
+            f"Клиент указал: {money(result.get('base_price'))}\n"
+            f"Вы указали БЕЗ скидки: {money(result.get('partner_order_amount'))}\n"
+            "Ожидаем согласования клиентом в приложении. Подтверждение пока недоступно.", reply_markup=review_buttons(result['token']))
+
+
+_amount_waiters = set()
+
+
+async def wait_for_amount(message, state, settings, token, revision):
+    # Persistent agreement lives in the backend. The check button also works after a lost notification.
+    for _ in range(300):
+        await asyncio.sleep(3)
+        data = await state.get_data()
+        if data.get('token') != token or data.get('amount_revision') != revision or await state.get_state() != Flow.confirm.state:
+            return
+        try:
+            result = await api(settings, 'POST', '/coupon/status', {**identity(message), 'token': token})
+        except ApiError:
+            return
+        current = await state.get_data()
+        if current.get('token') != token or current.get('amount_revision') != revision or await state.get_state() != Flow.confirm.state:
+            return
+        if result['amount_revision'] != revision:
+            return
+        if result['amount_review_status'] != 'pending':
+            await show_amount_result(message, state, result)
+            return
+
+
+@router.message(Flow.amount, F.text, ~F.text.startswith('/'))
+async def submit_amount(message: Message, state: FSMContext, settings):
+    raw = message.text.strip().replace(' ', '').replace(',', '.')
+    try:
+        amount = Decimal(raw)
+        if not amount.is_finite() or amount <= 0 or amount > 1000000 or amount.as_tuple().exponent < -2:
+            raise ValueError()
+    except (InvalidOperation, ValueError):
+        await message.answer('Введите сумму БЕЗ скидки от 0,01 до 1 000 000 ₽, не более двух знаков после запятой.')
+        return
+    data = await state.get_data()
+    result = await api(settings, 'POST', '/coupon/amount', {**identity(message), 'token': data['token'],
+        'order_amount': str(amount), 'amount_revision': data['amount_revision']})
+    await show_amount_result(message, state, result)
+    if result['amount_review_status'] == 'pending':
+        task = asyncio.create_task(wait_for_amount(message, state, settings, result['token'], result['amount_revision']))
+        _amount_waiters.add(task)
+        task.add_done_callback(_amount_waiters.discard)
+
+
+@router.callback_query(Flow.confirm, F.data.startswith('pcab:amount:'))
+@router.callback_query(Flow.confirm, F.data.startswith('pcab:check:'))
+async def review_amount(callback: CallbackQuery, state: FSMContext, settings):
+    data = await state.get_data()
+    token = callback.data.split(':')[2]
+    if token != data.get('token'):
+        await callback.answer('Откройте купон заново.', show_alert=True)
+        return
+    result = await api(settings, 'POST', '/coupon/status', {**identity(callback), 'token': token})
+    await callback.answer()
+    if callback.data.startswith('pcab:amount:'):
+        await state.update_data(amount_revision=result['amount_revision'])
+        await state.set_state(Flow.amount)
+        await callback.message.answer('Введите правильную стоимость БЕЗ учёта скидки Bloom Club, в рублях.')
+    else:
+        await show_amount_result(callback.message, state, result)
+
+
+@router.callback_query(Flow.confirm, F.data == "pcab:cancel")
+async def cancel_confirmation(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Подтверждение отменено. Если сумма неверна, попросите клиента открыть новый купон с правильной суммой.", reply_markup=menu())
 
 
 @router.callback_query(Flow.confirm, F.data.startswith("pcab:confirm:"))
@@ -235,12 +367,13 @@ async def confirm(callback: CallbackQuery, state: FSMContext, settings):
         await callback.answer("Откройте новое подтверждение.", show_alert=True)
         return
     result = await api(settings, "POST", "/coupon/confirm", {**identity(callback),
-        "token": data["token"], "allow_repeat": parts[3] == "1"})
+        "token": data["token"], "allow_repeat": parts[3] == "1",
+        "amount_revision": int(parts[4]) if len(parts) > 4 else None})
     await callback.answer()
     if result.get("repeat_confirmation_required"):
         await state.update_data(repeat=True)
         await callback.message.answer("Сегодня уже было подтверждение. Это другая покупка?",
-            reply_markup=final_buttons(data["token"], True))
+            reply_markup=final_buttons(data["token"], True, int(parts[4]) if len(parts) > 4 else None))
         return
     await state.clear()
     await callback.message.edit_reply_markup(reply_markup=None)
